@@ -13,7 +13,8 @@ knitr::opts_chunk$set(echo = TRUE)
 
 - evaluation metric: accuracy
 0.48108 with sample_submission.csv
-0.81783 with glmnet and recipe baseline
+0.8178 with glmnet and recipe baseline
+0.8197 with as_factor most of factor like columns
 
 - machine learning workflow: R tidymodel workflow/workflows
 
@@ -45,8 +46,10 @@ library(readr)
 library(janitor)
 library(lubridate)
 
-library(text2vec)
-
+library(text2vec) # step_dumm_hash to reduce the high dimension impact lead by step_dummy
+library(vcd) # visualize categorical data , especial mosaic plot
+library(ggmosaic)
+library(patchwork) # it can add multi ggplot output together by + /
 ```
 
 ### loading data
@@ -105,6 +108,358 @@ list(train=train, test=test)|>
 
 
 ## EDA
+```{r}
+train|>names()
+```
+### chisq_test for all features
+```{r}
+fct_cols_1 <- c('marital_status','application_mode','application_order','course','daytime_evening_attendance',
+              'previous_qualification','previous_qualification_grade','nacionality','mothers_qualification',
+              'fathers_qualification', 'mothers_occupation', 'fathers_occupation', 
+              'admission_grade', 'displaced', 'educational_special_needs', 
+              'debtor', 'tuition_fees_up_to_date', 'gender', 
+              'scholarship_holder', 'age_at_enrollment', 'international')
+fct_cols_2 <- c("curricular_units_1st_sem_credited", "curricular_units_1st_sem_enrolled",
+              "curricular_units_1st_sem_evaluations", "curricular_units_1st_sem_approved",
+              "curricular_units_1st_sem_grade", "curricular_units_1st_sem_without_evaluations",
+              "curricular_units_2nd_sem_credited", "curricular_units_2nd_sem_enrolled", 
+              "curricular_units_2nd_sem_evaluations", "curricular_units_2nd_sem_approved",
+              "curricular_units_2nd_sem_grade", "curricular_units_2nd_sem_without_evaluations",
+              )
+train|>
+  select(all_of(c(fct_cols_1, 'target')))|>
+  mutate(across(all_of(fct_cols_1),as_factor))|>
+  map(~ stats::chisq.test(.x, train$target)) %>%  # 对每一列进行卡方检验
+  map_dfr(tidy, .id = "variable")  # 将结果整理为数据框
+  select(-method)
+```
+Some Columns need further study
+- educational_speical_needs, chisq statistic value 0.233, pvalue 0.89 (not very useful)
+- nacionality , chisq statistic value 86, pvalue -6 (done)
+- international, statistic value 0.64, pvalue 0.72
+- previous_qualification_grade, parameter is 218
+- admission_grad, parameter is 1134
+- age_at_enrollment, 90
+- fathers_occupation,fathers_qualification, 110
+- mothers_occupation,mothers_qualification, 78
+- curricular_units_1st_sem_grade, parameter df is 2352
+- curricular_units_2nd_sem_grade, parameter df is 2373 
+
+
+### educational_speical_needs, chisq statistic value 0.233, pvalue 0.89 (not significant, can be removed in future)
+```{r, fig.height=3, fig.width=6 }
+## fig.height=240
+## fig.width=320
+
+train|>mutate(x=as_factor(educational_special_needs)) |> chisq_test(target~x)
+
+train|>janitor::tabyl(target,educational_special_needs ) |>adorn_percentages("row") |>adorn_pct_formatting(digits = 0)|>adorn_ns()
+train|>
+   ggplot() + 
+   geom_mosaic(aes(x=product(target, educational_special_needs ),fill=target)) 
+```
+
+### nacionality , chisq statistic value 86, pvalue 1.617041e-06	 (not big, but pvalue is significant , keep)
+```{r, fig.height=3, fig.width=6}
+## fig.height=240
+## fig.width=320
+
+train|>mutate(x=as_factor(nacionality)) |> chisq_test(target~x)
+
+train|>janitor::tabyl(target,nacionality ) |>adorn_percentages("row") |>adorn_pct_formatting(digits = 0)|>adorn_ns()
+
+train|>
+   ggplot() + 
+   geom_mosaic(aes(x=product(target, nacionality ),fill=target)) 
+```
+### international, statistic value 0.64, pvalue 0.72 ( remove )
+```{r, fig.height=3, fig.width=6}
+## fig.height=240
+## fig.width=320
+
+train|>mutate(x=as_factor(international)) |> chisq_test(target~x)
+
+train|>janitor::tabyl(target,international ) |>adorn_percentages("row") |>adorn_pct_formatting(digits = 0)|>adorn_ns()
+train|>
+   ggplot() + 
+   geom_mosaic(aes(x=product(target, international ),fill=target)) 
+```
+### previous_qualification_grade, parameter is 218 (leave it as continuous)
+```{r, fig.height=3, fig.width=6}
+## fig.height=240
+## fig.width=320
+
+anova_result <- 
+  train|>
+  specify(previous_qualification_grade~target) |>
+  hypothesise(null='independence') |>
+  calculate(stat='F')
+
+chisq_result <-
+  train|>
+  mutate(previous_qualification_grade= as_factor(previous_qualification_grade))|>
+  specify(previous_qualification_grade~target) |>
+  hypothesise(null='independence') |>
+  calculate(stat='chisq')
+
+tibble(metric_name = c('anonva','chisquare'),
+     metric_value= c(anova_result[[1]], chisq_result[[1]])) 
+
+(train|>ggplot(aes(x=previous_qualification_grade,fill=target)) +geom_density(alpha=0.3) ) /(
+train|>ggplot(aes(x=previous_qualification_grade,fill=target)) + geom_boxplot())
+```
+
+### admission_grad, parameter is 1134  (leave it as continuous)
+```{r, fig.height=3, fig.width=6}
+## fig.height=240
+## fig.width=320
+
+anova_result <- 
+  train|>
+  specify(admission_grade~target) |>
+  hypothesise(null='independence') |>
+  calculate(stat='F')
+
+chisq_result <-
+  train|>
+  mutate(admission_grade= as_factor(admission_grade))|>
+  specify(admission_grade~target) |>
+  hypothesise(null='independence') |>
+  calculate(stat='chisq')
+
+tibble(metric_name = c('anonva','chisquare'),
+     metric_value= c(anova_result[[1]], chisq_result[[1]])) 
+
+(train|>ggplot(aes(x=admission_grade,fill=target)) +geom_density(alpha=0.3) ) /(
+train|>ggplot(aes(x=admission_grade,fill=target)) + geom_boxplot())
+```
+
+
+
+### age_at_enrollment, 90 (leave it as continous)
+```{r, fig.height=3, fig.width=6}
+## fig.height=240
+## fig.width=320
+
+anova_result <- 
+  train|>
+  specify(age_at_enrollment~target) |>
+  hypothesise(null='independence') |>
+  calculate(stat='F')
+
+chisq_result <-
+  train|>
+  mutate(age_at_enrollment= as_factor(age_at_enrollment))|>
+  specify(age_at_enrollment~target) |>
+  hypothesise(null='independence') |>
+  calculate(stat='chisq')
+
+tibble(metric_name = c('anonva','chisquare'),
+     metric_value= c(anova_result[[1]], chisq_result[[1]])) 
+
+(train|>ggplot(aes(x=age_at_enrollment,fill=target)) +geom_density(alpha=0.3) ) /(
+train|>ggplot(aes(x=age_at_enrollment,fill=target)) + geom_boxplot())
+```
+
+### fathers_occupation  110 (TBD)
+```{r, fig.height=3, fig.width=6}
+## fig.height=240
+## fig.width=320
+
+anova_result <- 
+  train|>
+  specify(fathers_occupation~target) |>
+  hypothesise(null='independence') |>
+  calculate(stat='F')
+
+chisq_result <-
+  train|>
+  mutate(fathers_occupation= as_factor(fathers_occupation))|>
+  specify(fathers_occupation~target) |>
+  hypothesise(null='independence') |>
+  calculate(stat='chisq')
+
+tibble(metric_name = c('anonva','chisquare'),
+     metric_value= c(anova_result[[1]], chisq_result[[1]])) 
+
+(train|>ggplot(aes(x=fathers_occupation,fill=target)) +geom_density(alpha=0.3) ) /(
+train|>ggplot(aes(x=fathers_occupation,fill=target)) + geom_boxplot())
+```
+### fathers_qualification, 110 (TBD ,drop out centre different)
+```{r, fig.height=3, fig.width=6}
+## fig.height=240
+## fig.width=320
+
+anova_result <- 
+  train|>
+  specify(fathers_qualification~target) |>
+  hypothesise(null='independence') |>
+  calculate(stat='F')
+
+chisq_result <-
+  train|>
+  mutate(fathers_qualification= as_factor(fathers_qualification))|>
+  specify(fathers_qualification~target) |>
+  hypothesise(null='independence') |>
+  calculate(stat='chisq')
+
+tibble(metric_name = c('anonva','chisquare'),
+     metric_value= c(anova_result[[1]], chisq_result[[1]])) 
+
+(train|>ggplot(aes(x=fathers_qualification,fill=target)) +geom_density(alpha=0.3) ) /(
+train|>ggplot(aes(x=fathers_qualification,fill=target)) + geom_boxplot())
+```
+
+
+
+### mothers_occupation,mothers_qualification, 78(TBD)
+```{r, fig.height=3, fig.width=6}
+## fig.height=240
+## fig.width=320
+
+anova_result <- 
+  train|>
+  specify(mothers_occupation~target) |>
+  hypothesise(null='independence') |>
+  calculate(stat='F')
+
+chisq_result <-
+  train|>
+  mutate(mothers_occupation= as_factor(mothers_occupation))|>
+  specify(mothers_occupation~target) |>
+  hypothesise(null='independence') |>
+  calculate(stat='chisq')
+
+tibble(metric_name = c('anonva','chisquare'),
+     metric_value= c(anova_result[[1]], chisq_result[[1]])) 
+
+(train|>ggplot(aes(x=mothers_occupation,fill=target)) +geom_density(alpha=0.3) ) /(
+train|>ggplot(aes(x=mothers_occupation,fill=target)) + geom_boxplot())
+```
+
+### mothers_qualification, 78(TBD)
+```{r, fig.height=3, fig.width=6}
+## fig.height=240
+## fig.width=320
+
+anova_result <- 
+  train|>
+  specify(mothers_qualification~target) |>
+  hypothesise(null='independence') |>
+  calculate(stat='F')
+
+chisq_result <-
+  train|>
+  mutate(mothers_qualification= as_factor(mothers_qualification))|>
+  specify(mothers_qualification~target) |>
+  hypothesise(null='independence') |>
+  calculate(stat='chisq')
+
+tibble(metric_name = c('anonva','chisquare'),
+     metric_value= c(anova_result[[1]], chisq_result[[1]])) 
+
+(train|>ggplot(aes(x=mothers_qualification,fill=target)) +geom_density(alpha=0.3) ) /(
+train|>ggplot(aes(x=mothers_qualification,fill=target)) + geom_boxplot())
+```
+
+
+### curricular_units_1st_sem_grade, parameter df is 2352 (important continuous variable)
+```{r, fig.height=3, fig.width=6}
+## fig.height=240
+## fig.width=320
+
+anova_result <- 
+  train|>
+  specify(curricular_units_1st_sem_grade~target) |>
+  hypothesise(null='independence') |>
+  calculate(stat='F')
+
+chisq_result <-
+  train|>
+  mutate(curricular_units_1st_sem_grade= as_factor(curricular_units_1st_sem_grade))|>
+  specify(curricular_units_1st_sem_grade~target) |>
+  hypothesise(null='independence') |>
+  calculate(stat='chisq')
+
+tibble(metric_name = c('anonva','chisquare'),
+     metric_value= c(anova_result[[1]], chisq_result[[1]])) 
+
+
+(train|>ggplot(aes(x=curricular_units_1st_sem_grade,fill=target)) +geom_density(alpha=0.3) ) /(
+train|>ggplot(aes(x=curricular_units_1st_sem_grade,fill=target)) + geom_boxplot())
+```
+### curricular_units_2nd_sem_grade, parameter df is 2373 
+```{r, fig.height=3, fig.width=6}
+## fig.height=240
+## fig.width=320
+
+anova_result <- 
+  train|>
+  specify(curricular_units_2nd_sem_grade~target) |>
+  hypothesise(null='independence') |>
+  calculate(stat='F')
+
+chisq_result <-
+  train|>
+  mutate(curricular_units_2nd_sem_grade= as_factor(curricular_units_2nd_sem_grade))|>
+  specify(curricular_units_2nd_sem_grade~target) |>
+  hypothesise(null='independence') |>
+  calculate(stat='chisq')
+
+tibble(metric_name = c('anonva','chisquare'),
+     metric_value= c(anova_result[[1]], chisq_result[[1]])) 
+
+(train|>ggplot(aes(x=curricular_units_2nd_sem_grade,fill=target)) +geom_density(alpha=0.3) ) /(
+train|>ggplot(aes(x=curricular_units_2nd_sem_grade,fill=target)) + geom_boxplot())
+```
+### unemployment_rate
+```{r, fig.height=3, fig.width=6}
+## fig.height=240
+## fig.width=320
+
+anova_result <- 
+  train|>
+  specify(unemployment_rate~target) |>
+  hypothesise(null='independence') |>
+  calculate(stat='F')
+anova_result
+
+(train|>ggplot(aes(x=unemployment_rate,fill=target)) +geom_density(alpha=0.3) ) /(
+train|>ggplot(aes(x=unemployment_rate,fill=target)) + geom_boxplot())
+
+```
+### inflation_rate
+```{r, fig.height=3, fig.width=6}
+## fig.height=240
+## fig.width=320
+
+anova_result <- 
+  train|>
+  specify(inflation_rate~target) |>
+  hypothesise(null='independence') |>
+  calculate(stat='F')
+anova_result
+
+(train|>ggplot(aes(x=inflation_rate,fill=target)) +geom_density(alpha=0.3) ) /(
+train|>ggplot(aes(x=inflation_rate,fill=target)) + geom_boxplot())
+
+```
+### gdp
+```{r, fig.height=3, fig.width=6}
+## fig.height=240
+## fig.width=320
+
+anova_result <- 
+  train|>
+  specify(gdp~target) |>
+  hypothesise(null='independence') |>
+  calculate(stat='F')
+anova_result
+
+(train|>ggplot(aes(x=gdp,fill=target)) +geom_density(alpha=0.3) ) /(
+train|>ggplot(aes(x=gdp,fill=target)) + geom_boxplot())
+
+```
 
 ## Models
 ### data resample
@@ -117,43 +472,6 @@ cv_folds <- vfold_cv(train_set,
                      v = 3, 
                      repeats = 1,
                      strata = target)
-```
-
-### recipies
-#### v0
-```{r}
-rcp_v0 <- 
-  recipe(target ~ ., data = train_set) |>
-  update_role(id, new_role = 'ID') #|>
-  #step_impute_median(all_numeric_predictors()) |>
-  #step_normalize(all_numeric_predictors())
-```
-#### v1_baseline
-```{r}
-rcp_v1_bs <- 
-  recipe(target ~ ., data = train_set) |>
-  update_role(id, new_role = 'ID') |>
-  step_impute_median(all_numeric_predictors()) |>
-  step_normalize(all_numeric_predictors())
-```
-
-#### v2_factor
-```{r}
-rcp_v2_fc <- 
-  recipe(target ~ ., data = train_set) |>
-  update_role(id, new_role = 'ID') |>
-  step_impute_median(all_numeric_predictors()) |>
-  step_mutate_at(c('marital_status','application_mode','application_order','course'),
-                 fn=as_factor)|>
-  step_novel(all_nominal_predictors())|>
-  step_unknown(all_nominal_predictors())|>
-  step_other(all_nominal_predictors())|>
-  step_dummy(all_nominal_predictors() )|>
-  #step_zv(all_numeric_predictors())|>
-  #step_corr(all_numeric_predictors())|>
-  step_normalize(all_numeric_predictors())
-
-rcp_v2_fc |>prep()|>juice()|>glimpse()
 ```
 
 
@@ -247,6 +565,135 @@ selected_eng <- list(glm=glm_eng,
 acu_metrics <- metric_set(accuracy,precision) # main goal is roc_auc, accuracy is just for reference
 ```
 
+
+### recipies
+```{r}
+check_metric <- function(rcp_script,default_engineer='glm'){
+  glm_eng <- 
+  multinom_reg(penalty = 0.01623777,
+               mixture = 0.05) |>  # Example penalty and mixture values
+  set_engine('nnet') |>
+  set_mode("classification")  
+  
+  lgbm_eng<-
+   parsnip::boost_tree(
+      trees = 100, # Number of trees
+      learn_rate = 0.1,
+      loss_reduction = 0.001,
+      stop_iter = 50,
+      min_n = 100
+   ) |>
+   set_mode("classification")|>
+   set_engine("lightgbm",
+              num_threads=12,
+              metric = "multiclass",              # 优化目标
+              verbose=1) 
+  wfit <- workflow()|>
+    add_recipe(rcp_script)
+    
+  if (default_engineer =='glm'){
+    wfit <- 
+      wfit |> add_model(glm_eng)
+  } else{
+    wfit <- 
+      wfit |> add_model(lgbm_eng)
+  }
+    wfit <- 
+      wfit |> last_fit(df_split)
+  
+  wfit|>collect_metrics() |> print()
+  return(wfit)
+}
+```
+
+#### v0
+```{r}
+rcp_v0 <- 
+  recipe(target ~ ., data = train_set) |>
+  update_role(id, new_role = 'ID') #|>
+  #step_impute_median(all_numeric_predictors()) |>
+  #step_normalize(all_numeric_predictors())
+```
+#### v1_baseline
+```{r}
+rcp_v1_bs <- 
+  recipe(target ~ ., data = train_set) |>
+  update_role(id, new_role = 'ID') |>
+  step_impute_median(all_numeric_predictors()) |>
+  step_normalize(all_numeric_predictors())
+```
+
+#### v2_factor
+```{r}
+rcp_v2_fc <- 
+  recipe(target ~ ., data = train_set) |>
+  update_role(id, new_role = 'ID') |>
+  step_impute_median(all_numeric_predictors()) |>
+  step_mutate_at(c('marital_status','application_mode','application_order','course'),
+                 fn=as_factor)|>
+  step_novel(all_nominal_predictors())|>
+  step_unknown(all_nominal_predictors())|>
+  step_other(all_nominal_predictors())|>
+  step_dummy(all_nominal_predictors() )|>
+  #step_zv(all_numeric_predictors())|>
+  #step_corr(all_numeric_predictors())|>
+  step_normalize(all_numeric_predictors())
+
+rcp_v2_fc |>prep()|>juice()|>glimpse()
+```
+
+#### v3_fct_num
+```{r}
+num_cols <- c('previous_qualification_grade','admission_grade','age_at_enrollment',
+              'curricular_units_1st_sem_grade','curricular_units_2nd_sem_grade',
+              'unemployment_rate','inflation_rate','gdp')
+
+fct_cols_1 <- c('marital_status','application_mode','application_order','course','daytime_evening_attendance',
+              'previous_qualification','nacionality','mothers_qualification',
+              'fathers_qualification', 'mothers_occupation', 'fathers_occupation', 
+               'displaced', 'educational_special_needs', 
+              'debtor', 'tuition_fees_up_to_date', 'gender', 
+              'scholarship_holder', 'international')
+
+fct_cols_2 <- c("curricular_units_1st_sem_credited", "curricular_units_1st_sem_enrolled",
+              "curricular_units_1st_sem_evaluations", "curricular_units_1st_sem_approved",
+              "curricular_units_1st_sem_without_evaluations",
+              "curricular_units_2nd_sem_credited", "curricular_units_2nd_sem_enrolled", 
+              "curricular_units_2nd_sem_evaluations", "curricular_units_2nd_sem_approved",
+               "curricular_units_2nd_sem_without_evaluations"
+              )
+rcp_v3_num <-
+  recipe(target ~ ., data = train_set) |>
+  update_role(id, new_role = 'ID') |>
+  step_mutate_at(all_of(c(fct_cols_1,fct_cols_2)),fn=as_factor)|>
+  step_impute_median(all_numeric_predictors()) |>
+  step_log(age_at_enrollment, offset=1) |>
+  step_novel(all_nominal_predictors())|>
+  step_unknown(all_nominal_predictors())|>
+  step_other(all_nominal_predictors())|>
+  step_dummy(all_nominal_predictors() )|>
+  step_zv(all_numeric_predictors())|>
+  step_corr(all_numeric_predictors())|>
+  step_normalize(all_numeric_predictors())
+
+tmp_wfit <- check_metric(rcp_v3_num)
+```
+
+
+
+
+#### select_recipes
+```{r}
+rcp_selected <- list(
+  #v1 =rcp_v1_bs,
+  v2= rcp_v2_fc,
+  v3= rcp_v3_num,
+  v0 = rcp_v0
+)
+
+```
+
+
 ### workflow
 
 #### simple start
@@ -254,11 +701,16 @@ acu_metrics <- metric_set(accuracy,precision) # main goal is roc_auc, accuracy i
 ```{r}
 set.seed(1234)
 
-simple_wf_fit<- 
-  workflow() |>
-  add_recipe(rcp_v2_fc) |>
-  add_model(glm_eng)|>
-  last_fit(df_split)
+simple_wfs_fit_results <- 
+  rcp_selected|>
+  map_dfr(\(rcp_item) 
+          workflow() |> 
+            add_recipe(rcp_item) |>
+            add_model(glm_eng)|>
+            last_fit(df_split)|>
+            collect_metrics(),
+          .id='source')
+simple_wfs_fit_results |>filter(.metric=='accuracy')
 
 # simple_wf_result <-
 #   simple_wf_fit|>
@@ -267,8 +719,8 @@ simple_wf_fit<-
 #           control = control_resamples(verbose=TRUE),
 #            metrics=acu_metrics)
 # #plan(sequential)
- simple_wf_fit |> collect_metrics()
-#   extract_fit_engine()|>
+ #simple_wf_fit |> collect_metrics()
+ #   extract_fit_engine()|>
 #   plot()
 #simple_wf_fit < -simple_wf_fit |> last_fit(df_split) 
 ```
